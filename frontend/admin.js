@@ -29,7 +29,7 @@ import {
 } from './budget-store.js';
 import {
   loadOfficials,
-  saveOfficials,
+  loadOfficialsFromAPI,
   updateOfficial,
   resetOfficialsToDefault,
   subscribeOfficials,
@@ -6437,37 +6437,39 @@ function normalizeAnnouncementFromDatabase(row) {
     if (!ann) return;
 
     const nextCritical = !ann.isCritical;
-    ann.isCritical = nextCritical;
-    ann.isEmergency = nextCritical;
-    ann.urgency = nextCritical ? 'Critical' : 'Standard';
 
     try {
-      saveAnnouncements(announcementsList);
-    } catch (e) {
-      console.warn('LocalStorage announcement sync error:', e);
-    }
-
-    renderAnnouncementsTable();
-
-    try {
-      await fetch(`${ADMIN_API_BASE}/announcements/${encodeURIComponent(id)}/priority`, {
+      // Save to the database so the Public Home Page picks it up
+      const response = await fetch(`${ADMIN_API_BASE}/announcements/${encodeURIComponent(id)}/status`, {
         method: 'PATCH',
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          is_critical: nextCritical,
           urgency: nextCritical ? 'Critical' : 'Standard'
         })
       });
-    } catch (error) {
-      console.warn('Backend announcement priority update optional sync:', error);
-    }
 
-    showAdminToast(
-      nextCritical ? '🚨 Marked as Critical Priority' : 'Standard Priority Restored',
-      `"${ann.title}" is now ${nextCritical ? 'flagged with Critical Advisory badge and prioritized.' : 'marked as standard priority.'}`,
-      nextCritical ? 'warning' : 'info'
-    );
+      const data = await response.json();
+
+      if (!response.ok || !data.success) {
+        throw new Error(data.message || 'Unable to update announcement priority.');
+      }
+
+      await loadAnnouncementsFromBackend();
+
+      showAdminToast(
+        nextCritical ? '🚨 Marked as Critical Priority' : 'Standard Priority Restored',
+        `"${ann.title}" is now ${nextCritical ? 'flagged as a Critical Advisory on the Public Home Page.' : 'marked as standard priority.'}`,
+        nextCritical ? 'warning' : 'info'
+      );
+    } catch (error) {
+      console.error('Update announcement priority error:', error);
+      showAdminToast(
+        'Priority Update Failed',
+        error.message || 'Could not update announcement priority.',
+        'danger'
+      );
+    }
   };
 
   // Event Listeners for Proposals Filters
@@ -6787,43 +6789,62 @@ function normalizeAnnouncementFromDatabase(row) {
           const summaryChanged = rawSummary !== initialSummary;
           const wasAutoDerived = annSummaryInput?.dataset.wasAutoDerived === 'true';
 
-          const finalHtmlContent = contentChanged ? plainTextToHtml(rawContent) : prev.content;
+          const finalHtmlContent = rawContent;
           let finalSummary = rawSummary;
           if (!rawSummary || (contentChanged && !summaryChanged && wasAutoDerived)) {
             finalSummary = deriveSummaryFromText(rawContent);
           }
 
-          announcementsList[existingIdx] = normalizeAnnouncement({
-            ...prev,
-            title,
-            category: cat,
-            audience: aud,
-            department,
-            date: datePublished,
-            status,
-            isCritical,
-            isEmergency: isCritical,
-            summary: finalSummary,
-            content: finalHtmlContent,
-            plainContent: rawContent,
-            publishedAt: prev.publishedAt || Date.now(),
-            updatedAt: Date.now()
-          }, existingIdx);
+          try {
+            btnSubmitNewAnn.disabled = true;
+            btnSubmitNewAnn.textContent = 'Saving...';
 
-          persistAnnouncementsState();
-          renderAnnouncementsTable();
-          modalNewAnn?.classList.remove('active');
-          document.getElementById('newAnnouncementForm')?.reset();
-          if (annEditIdInput) annEditIdInput.value = '';
-          setModalPriorityState(false, false);
+            const response = await fetch(`${ADMIN_API_BASE}/announcements/${encodeURIComponent(editingId)}`, {
+              method: 'PUT',
+              credentials: 'include',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                headline: title,
+                category: cat,
+                target_audience: aud,
+                urgency: isCritical ? 'Critical' : 'Standard',
+                feed_summary: finalSummary,
+                announcement_content: finalHtmlContent,
+                publication_status: status === 'Active' ? 'Published' : 'Unpublished'
+              })
+            });
 
-          showAdminToast(
-            'Announcement Updated',
-            status === 'Active'
-              ? `"${title}" updated and synchronized with the Public Home Page.`
-              : `"${title}" saved with status: ${status} (hidden from Public Home Page).`,
-            'success'
-          );
+            const data = await response.json();
+
+            if (!response.ok || !data.success) {
+              throw new Error(data.message || 'Unable to update announcement.');
+            }
+
+            await loadAnnouncementsFromBackend();
+
+            modalNewAnn?.classList.remove('active');
+            document.getElementById('newAnnouncementForm')?.reset();
+            if (annEditIdInput) annEditIdInput.value = '';
+            setModalPriorityState(false, false);
+
+            showAdminToast(
+              'Announcement Updated',
+              status === 'Active'
+                ? `"${title}" updated and synchronized with the Public Home Page.`
+                : `"${title}" saved with status: ${status} (hidden from Public Home Page).`,
+              'success'
+            );
+          } catch (error) {
+            console.error('Update announcement error:', error);
+            showAdminToast(
+              'Announcement Error',
+              error.message || 'Unable to update announcement.',
+              'danger'
+            );
+          } finally {
+            btnSubmitNewAnn.disabled = false;
+            btnSubmitNewAnn.textContent = 'Broadcast Announcement';
+          }
           return;
         }
       }
@@ -6844,7 +6865,7 @@ function normalizeAnnouncementFromDatabase(row) {
             target_audience: aud,
             urgency: isCritical ? 'Critical' : 'Standard',
             feed_summary: rawSummary || deriveSummaryFromText(rawContent),
-            announcement_content: plainTextToHtml(rawContent),
+            announcement_content: rawContent,
             publication_status: status === 'Active' ? 'Published' : 'Unpublished',
             published_at: status === 'Active' ? datePublished : null
           })
@@ -10119,7 +10140,11 @@ document.getElementById('preRegisterForm')?.addEventListener('submit', function 
     if (btnExport) btnExport.addEventListener('click', exportResidentRegistryCsv);
   }
 
-  // Initial render of all sub-tables
+// Barangay Officials filter and search state
+let officialsFilterMode = 'all';
+let officialsSearchQuery = '';
+
+// Initial render of all sub-tables
 renderProposalsTable();
 loadProjectsFromDatabase();
 loadAnnouncementsFromBackend();
@@ -10180,8 +10205,6 @@ refreshAdminDashboard(getActiveDashboardYear());
   // ==============================================================
   // BARANGAY OFFICIALS ROSTER & COUNCIL MANAGEMENT
   // ==============================================================
-  let officialsFilterMode = 'all';
-  let officialsSearchQuery = '';
 
   function renderAdminOfficialsView() {
     const officials = loadOfficials();
@@ -10364,13 +10387,18 @@ refreshAdminDashboard(getActiveDashboardYear());
       `;
     }).join('');
 
-    // Attach click listeners to edit buttons
-    tableBody.querySelectorAll('button[data-official-id]').forEach(btn => {
-      btn.addEventListener('click', function () {
-        const id = this.getAttribute('data-official-id');
-        openEditOfficialModal(id);
-      });
-    });
+    // Handle Edit button clicks using event delegation
+tableBody.onclick = function (event) {
+  const editButton = event.target.closest('button[data-official-id]');
+
+  if (!editButton) return;
+
+  event.preventDefault();
+  event.stopPropagation();
+
+  const id = editButton.getAttribute('data-official-id');
+  openEditOfficialModal(id);
+};
 
     if (countIndicator) {
       countIndicator.innerHTML = `Showing <strong>${filtered.length}</strong> of <strong>${total}</strong> officials`;
@@ -10407,51 +10435,94 @@ refreshAdminDashboard(getActiveDashboardYear());
     document.body.style.overflow = '';
   }
 
-  function saveOfficialFromModal() {
-    const id = document.getElementById('editOfficialId')?.value;
-    const nameInput = document.getElementById('editOfficialName');
-    const name = nameInput?.value?.trim();
-    const position = document.getElementById('editOfficialPosition')?.value;
-    const status = document.getElementById('editOfficialStatus')?.value || 'Active';
-    const role = document.getElementById('editOfficialRole')?.value?.trim();
-    const contact = document.getElementById('editOfficialContact')?.value?.trim();
-    const schedule = document.getElementById('editOfficialSchedule')?.value?.trim();
+  
+  async function saveOfficialFromModal() {
+  const id = document.getElementById('editOfficialId')?.value;
+  const nameInput = document.getElementById('editOfficialName');
+  const name = nameInput?.value?.trim();
+  const position = document.getElementById('editOfficialPosition')?.value;
+  const status = document.getElementById('editOfficialStatus')?.value || 'Active';
+  const role = document.getElementById('editOfficialRole')?.value?.trim();
+  const contact = document.getElementById('editOfficialContact')?.value?.trim();
+  const schedule = document.getElementById('editOfficialSchedule')?.value?.trim();
 
-    if (!name) {
-      if (nameInput) {
-        nameInput.focus();
-        nameInput.style.borderColor = '#ef4444';
-      }
-      showAdminToast('Name Required', 'Please provide the official’s legal name.', 'warning');
-      return;
+  if (!name) {
+    if (nameInput) {
+      nameInput.focus();
+      nameInput.style.borderColor = '#ef4444';
     }
 
-    const isLeader = (position === 'Punong Barangay');
+    showAdminToast(
+      'Name Required',
+      'Please provide the official’s legal name.',
+      'warning'
+    );
+    return;
+  }
 
-    const updated = updateOfficial(id, {
+  const currentOfficial = loadOfficials().find(
+    official => Number(official.id) === Number(id)
+  );
+
+  if (!currentOfficial) {
+    showAdminToast(
+      'Official Not Found',
+      'Could not locate the official record.',
+      'warning'
+    );
+    return;
+  }
+
+  const isLeader = position === 'Punong Barangay';
+
+  const btnSave = document.getElementById('btnSaveOfficialChanges');
+
+  try {
+    if (btnSave) {
+      btnSave.disabled = true;
+      btnSave.textContent = 'Saving...';
+    }
+
+    await updateOfficial(id, {
       name,
       position,
+      term: currentOfficial.term || '',
       status,
       role: role || 'General Council Duties',
       contact: contact || 'None',
       schedule: schedule || 'Regular Office Hours',
-      isLeader
+      isLeader,
+      gridClass: currentOfficial.gridClass,
+      displayOrder: currentOfficial.displayOrder
     });
 
-    if (updated) {
-      closeEditOfficialModal();
-      renderAdminOfficialsView();
-      showAdminToast(
-        'Barangay Official Updated',
-        `Successfully updated record for "${escapeOfficialHtml(name)}". Changes reflect immediately on public website.`,
-        'success'
-      );
-    } else {
-      showAdminToast('Update Failed', 'Could not save official details.', 'danger');
+    closeEditOfficialModal();
+    renderAdminOfficialsView();
+
+    showAdminToast(
+      'Barangay Official Updated',
+      `Successfully updated record for "${escapeOfficialHtml(name)}".`,
+      'success'
+    );
+
+  } catch (error) {
+    console.error('Official update error:', error);
+
+    showAdminToast(
+      'Update Failed',
+      error.message || 'Could not save official details.',
+      'danger'
+    );
+
+  } finally {
+    if (btnSave) {
+      btnSave.disabled = false;
+      btnSave.textContent = 'Save Changes';
     }
   }
+}
 
-  function initOfficialsModule() {
+  async function initOfficialsModule() {
     // Search input
     const searchInput = document.getElementById('officialsSearchInput');
     const clearBtn = document.getElementById('btnClearOfficialsSearch');
@@ -10499,15 +10570,40 @@ refreshAdminDashboard(getActiveDashboardYear());
         renderAdminOfficialsView();
       });
     }
-
-    // Reset roster to default
+    
+    // Reset roster to default in PostgreSQL
     const btnResetRoster = document.getElementById('btnResetOfficialsRoster');
+
     if (btnResetRoster) {
-      btnResetRoster.addEventListener('click', function () {
-        if (confirm('Are you sure you want to reset all Barangay Officials to the original default roster?')) {
-          resetOfficialsToDefault();
+      btnResetRoster.addEventListener('click', async function () {
+        if (!confirm('Are you sure you want to reset all Barangay Officials to the original default roster?')) {
+          return;
+        }
+
+        try {
+          btnResetRoster.disabled = true;
+
+          await resetOfficialsToDefault();
+
           renderAdminOfficialsView();
-          showAdminToast('Roster Reset', 'Barangay Officials roster has been restored to default.', 'info');
+
+          showAdminToast(
+            'Roster Reset',
+            'Barangay Officials roster has been restored to default.',
+            'info'
+          );
+
+        } catch (error) {
+          console.error('Officials roster reset failed:', error);
+
+          showAdminToast(
+            'Reset Failed',
+            error.message || 'Could not restore the default roster.',
+            'danger'
+          );
+
+        } finally {
+          btnResetRoster.disabled = false;
         }
       });
     }
@@ -10528,18 +10624,66 @@ refreshAdminDashboard(getActiveDashboardYear());
       });
     }
 
-    // Subscribe to external store changes
-    subscribeOfficials(() => {
-      renderAdminOfficialsView();
-    });
+    // Update the Admin Console header with the current Barangay Secretary.
+    function syncAdminSecretaryName() {
+    const secretary = loadOfficials().find(official =>
+      String(official.position || '').toLowerCase().includes('secretary')
+    );
+
+    if (!secretary) return;
+
+    // Top-right header name
+    const headerName = document.querySelector(
+      '.topbar-user-badge .user-name-tag'
+    );
+
+    // Sidebar profile name above Public Home
+    const sidebarName = document.querySelector(
+      '.sidebar-footer .profile-name'
+    );
+
+    if (headerName) {
+      headerName.textContent = secretary.name;
+    }
+
+    if (sidebarName) {
+      sidebarName.textContent = secretary.name;
+      sidebarName.title = secretary.name;
+    }
+  }
+
+// Subscribe to external store changes.
+subscribeOfficials(() => {
+  renderAdminOfficialsView();
+  syncAdminSecretaryName();
+});
 
     // Make functions accessible globally
     window.renderAdminOfficialsView = renderAdminOfficialsView;
     window.openEditOfficialModal = openEditOfficialModal;
     window.closeEditOfficialModal = closeEditOfficialModal;
 
-    // Render initially
-    renderAdminOfficialsView();
+    // Load Barangay Officials from PostgreSQL before rendering.
+    try {
+      await loadOfficialsFromAPI();
+
+      renderAdminOfficialsView();
+
+      syncAdminSecretaryName();
+
+      console.log('Barangay Officials loaded from PostgreSQL:', loadOfficials());
+
+    } catch (error) {
+      console.error('Failed to load Barangay Officials from PostgreSQL:', error);
+
+      renderAdminOfficialsView();
+
+      showAdminToast(
+        'Officials Loading Failed',
+        error.message || 'Could not load Barangay Officials from the database.',
+        'danger'
+      );
+    }
   }
 
   initOfficialsModule();

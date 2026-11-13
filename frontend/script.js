@@ -16,10 +16,12 @@ import {
   BUDGET_CATEGORIES,
   BUDGET_QUARTERS,
   BUDGET_CATEGORY_COLORS,
+  escapeBudgetHtml,
   subscribeBudgetRecords
 } from './budget-store.js';
 import {
   loadOfficials,
+  loadOfficialsFromAPI,
   subscribeOfficials,
   escapeOfficialHtml
 } from './officials-store.js';
@@ -2486,9 +2488,17 @@ document.addEventListener('DOMContentLoaded', function () {
 
       return `
         <article class="announcement-card ${item.isEmergency ? 'emergency-card' : 'standard-card'}" data-id="${safeId}">
+          ${item.isEmergency ? `
+          <div class="emergency-top-banner">
+            <div class="emergency-banner-left">
+              <span class="emergency-pulse-dot"></span>
+              <span class="emergency-banner-text">Critical Advisory</span>
+            </div>
+            <span class="emergency-banner-tag">Action Required</span>
+          </div>` : ''}
           <div class="announcement-card-inner">
             <div class="announcement-meta-row">
-              <span class="meta-category-pill">${safeCategory}</span>
+              <span class="meta-category-pill ${item.isEmergency ? 'pill-emergency' : ''}">${safeCategory}</span>
               <span class="meta-date-item">${safeDate}</span>
             </div>
             <h3 class="announcement-card-title">${safeTitle}</h3>
@@ -2510,10 +2520,14 @@ document.addEventListener('DOMContentLoaded', function () {
     const item = announcements.find(function (a) { return String(a.id) === String(id); });
     if (!item || !announcementDetailModal || !announcementModalContent) return;
 
+    const modalCard = announcementDetailModal.querySelector('.announcement-modal-card');
+    if (modalCard) modalCard.classList.toggle('is-critical', !!item.isEmergency);
+
     announcementModalContent.innerHTML = `
+      ${item.isEmergency ? '<div class="announcement-modal-header-banner"><span>🚨</span><span>Critical Advisory</span></div>' : ''}
       <div class="announcement-modal-scrollable">
         <div class="modal-meta-bar">
-          <span class="meta-category-pill">${escapeAnnouncementHtml(item.category)}</span>
+          <span class="meta-category-pill ${item.isEmergency ? 'pill-emergency' : ''}">${escapeAnnouncementHtml(item.category)}</span>
           <span>Published: ${escapeAnnouncementHtml(item.date)}</span>
         </div>
         <h2 class="modal-announcement-title">${escapeAnnouncementHtml(item.title)}</h2>
@@ -2611,11 +2625,20 @@ document.addEventListener('DOMContentLoaded', function () {
     }).join('');
   }
 
-  // Initial render of officials
-  renderPublicOfficials();
-
-  // Subscribe to real-time changes
+  // Subscribe to updates from the shared PostgreSQL roster.
   subscribeOfficials((updatedList) => {
     renderPublicOfficials(updatedList);
   });
+
+  // Load the latest roster from PostgreSQL when the public page opens.
+  loadOfficialsFromAPI().catch((error) => {
+    console.error('Failed to load public Barangay Officials:', error);
+  });
+
+  // Refresh periodically so changes made on another device appear here.
+  setInterval(() => {
+    loadOfficialsFromAPI().catch((error) => {
+      console.warn('Could not refresh public Barangay Officials:', error);
+    });
+  }, 30000);
 });

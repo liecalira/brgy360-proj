@@ -148,128 +148,238 @@ export function escapeOfficialHtml(str) {
     .replace(/'/g, '&#39;');
 }
 
-/**
- * Load officials from localStorage, seeding with DEFAULT_OFFICIALS if not present.
- */
+
+// Current officials loaded from the PostgreSQL API.
+let officialsCache = [];
+
+const OFFICIALS_API_URL = 'http://localhost:5000/api/officials';
+
+// Convert PostgreSQL records into the format used by the existing UI.
+function normalizeOfficial(row) {
+  return {
+    id: Number(row.official_id ?? row.id),
+    name: row.name || '',
+    position: row.position || '',
+    term: row.term || '',
+    status: row.status || 'Active',
+    role: row.role || '',
+    contact: row.contact || '',
+    schedule: row.schedule || '',
+    isLeader: Boolean(row.is_leader ?? row.isLeader),
+    gridClass: row.grid_class || row.gridClass || '',
+    avatarSvgType: (row.is_leader ?? row.isLeader) ? 'star' : 'user',
+    displayOrder: Number(row.display_order ?? row.displayOrder ?? 0)
+  };
+}
+
+// Synchronous access to the latest successfully loaded database records.
 export function loadOfficials() {
-  try {
-    const raw = localStorage.getItem(OFFICIALS_STORAGE_KEY);
-    if (!raw) {
-      saveOfficials(DEFAULT_OFFICIALS, false);
-      return [...DEFAULT_OFFICIALS];
+  return [...officialsCache];
+}
+
+// Last roster snapshot, used to skip re-renders when nothing changed.
+let lastSnapshot = '';
+
+// Notify listeners on this page. Only broadcast to other tabs when the
+// roster was actually edited here (never from a plain refresh, or the
+// tabs would keep refreshing each other forever).
+function notifyOfficialsChanged(broadcast = false) {
+  window.dispatchEvent(
+    new CustomEvent(OFFICIALS_SYNC_EVENT, {
+      detail: [...officialsCache]
+    })
+  );
+
+  if (broadcast && typeof BroadcastChannel !== 'undefined') {
+    try {
+      const channel = new BroadcastChannel(OFFICIALS_CHANNEL_NAME);
+      channel.postMessage({
+        type: 'OFFICIALS_UPDATED'
+      });
+      channel.close();
+    } catch (error) {
+      console.warn('Officials broadcast failed:', error);
     }
-    const parsed = JSON.parse(raw);
-    if (Array.isArray(parsed) && parsed.length > 0) {
-      return parsed;
-    }
-    saveOfficials(DEFAULT_OFFICIALS, false);
-    return [...DEFAULT_OFFICIALS];
-  } catch (err) {
-    console.warn('[OfficialsStore] Error parsing officials from localStorage, reverting to defaults:', err);
-    return [...DEFAULT_OFFICIALS];
   }
 }
 
-/**
- * Save officials array to localStorage and notify listeners across tabs and components.
- */
+// Load the shared roster from PostgreSQL.
+export async function loadOfficialsFromAPI({ broadcast = false } = {}) {
+  const response = await fetch(OFFICIALS_API_URL, {
+    method: 'GET',
+    credentials: 'include'
+  });
+
+  const data = await response.json();
+
+  if (!response.ok || !data.success) {
+    throw new Error(data.message || 'Failed to load Barangay Officials.');
+  }
+
+  const next = (data.officials || [])
+    .map(normalizeOfficial)
+    .sort((a, b) => (a.displayOrder - b.displayOrder) || (a.id - b.id));
+
+  const snapshot = JSON.stringify(next);
+  const changed = snapshot !== lastSnapshot;
+
+  lastSnapshot = snapshot;
+  officialsCache = next;
+
+  // Re-render listeners only when the data really changed (or after an edit).
+  if (changed || broadcast) notifyOfficialsChanged(broadcast);
+
+  return [...officialsCache];
+}
+
+// Keep this export for compatibility with existing imports.
+// PostgreSQL, not localStorage, is now the source of truth.
 export function saveOfficials(officialsList, notify = true) {
-  try {
-    localStorage.setItem(OFFICIALS_STORAGE_KEY, JSON.stringify(officialsList));
-    if (notify) {
-      // Dispatch in-page event
-      window.dispatchEvent(new CustomEvent(OFFICIALS_SYNC_EVENT, { detail: officialsList }));
+  officialsCache = Array.isArray(officialsList)
+    ? [...officialsList]
+    : [];
 
-      // Also trigger a synthetic storage event for same-tab listeners
-      try {
-        window.dispatchEvent(new StorageEvent('storage', {
-          key: OFFICIALS_STORAGE_KEY,
-          newValue: JSON.stringify(officialsList)
-        }));
-      } catch (_) {}
+  if (notify) notifyOfficialsChanged();
 
-      // Cross-tab broadcast channel
-      if (typeof BroadcastChannel !== 'undefined') {
-        try {
-          const ch = new BroadcastChannel(OFFICIALS_CHANNEL_NAME);
-          ch.postMessage({ type: 'OFFICIALS_UPDATED', data: officialsList });
-          ch.close();
-        } catch (_) {}
-      }
-    }
-    return true;
-  } catch (err) {
-    console.error('[OfficialsStore] Failed to save officials:', err);
-    return false;
-  }
+  return true;
 }
 
-/**
- * Update a single official by ID and persist changes.
- */
-export function updateOfficial(id, updatedFields) {
-  const current = loadOfficials();
+// Update one official in PostgreSQL.
+
+export async function updateOfficial(id, updatedFields) {
   const numericId = Number(id);
-  const index = current.findIndex(o => Number(o.id) === numericId);
-  if (index === -1) {
-    console.warn(`[OfficialsStore] Official with ID ${id} not found.`);
-    return null;
+
+  if (!Number.isInteger(numericId) || numericId <= 0) {
+    throw new Error('Invalid official ID.');
   }
 
-  current[index] = {
-    ...current[index],
+  const existing = officialsCache.find(
+    official => Number(official.id) === numericId
+  );
+
+  if (!existing) {
+    throw new Error('Official not found. Please reload the roster.');
+  }
+
+  // Preserve fields that are not included in the edit form.
+  const merged = {
+    ...existing,
     ...updatedFields,
-    id: numericId // Ensure ID is preserved
+    id: numericId
   };
 
-  saveOfficials(current, true);
-  return current[index];
+  const payload = {
+    name: merged.name,
+    position: merged.position,
+    term: merged.term || '',
+    status: merged.status || 'Active',
+    role: merged.role || '',
+    contact: merged.contact || '',
+    schedule: merged.schedule || '',
+    is_leader: Boolean(merged.isLeader),
+    grid_class: merged.gridClass || '',
+    display_order: Number(merged.displayOrder || 0)
+  };
+
+  const response = await fetch(`${OFFICIALS_API_URL}/${numericId}`, {
+    method: 'PUT',
+    credentials: 'include',
+    headers: {
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify(payload)
+  });
+
+  const data = await response.json();
+
+  if (!response.ok || !data.success) {
+    throw new Error(data.message || 'Failed to update official.');
+  }
+
+  // Refresh the complete roster using PostgreSQL as the source of truth.
+  await loadOfficialsFromAPI({ broadcast: true });
+
+  return officialsCache.find(
+    official => official.id === numericId
+  ) || null;
 }
 
-/**
- * Reset all officials back to default roster
- */
-export function resetOfficialsToDefault() {
-  saveOfficials(DEFAULT_OFFICIALS, true);
-  return [...DEFAULT_OFFICIALS];
+// Restore the original roster by updating existing database records.
+
+export async function resetOfficialsToDefault() {
+  for (const official of DEFAULT_OFFICIALS) {
+    const response = await fetch(
+      `${OFFICIALS_API_URL}/${official.id}`,
+      {
+        method: 'PUT',
+        credentials: 'include',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          name: official.name,
+          position: official.position,
+          term: official.term,
+          status: official.status,
+          role: official.role,
+          contact: official.contact,
+          schedule: official.schedule,
+          is_leader: official.isLeader,
+          grid_class: official.gridClass,
+          display_order: official.displayOrder
+        })
+      }
+    );
+
+    const data = await response.json();
+
+    if (!response.ok || !data.success) {
+      throw new Error(
+        data.message || `Failed to restore official: ${official.name}`
+      );
+    }
+  }
+
+  return await loadOfficialsFromAPI({ broadcast: true });
 }
 
-/**
- * Subscribe to officials updates (both custom event and cross-tab storage changes)
- */
+// Subscribe to updates from this page and other tabs.
 export function subscribeOfficials(callback) {
   if (typeof callback !== 'function') return () => {};
 
-  const handleCustom = (e) => {
-    callback(e.detail || loadOfficials());
-  };
-
-  const handleStorage = (e) => {
-    if (e.key === OFFICIALS_STORAGE_KEY) {
-      callback(loadOfficials());
-    }
+  const handleCustom = (event) => {
+    callback(event.detail || loadOfficials());
   };
 
   window.addEventListener(OFFICIALS_SYNC_EVENT, handleCustom);
-  window.addEventListener('storage', handleStorage);
 
-  let broadcastCh = null;
+  let broadcastChannel = null;
+
   if (typeof BroadcastChannel !== 'undefined') {
     try {
-      broadcastCh = new BroadcastChannel(OFFICIALS_CHANNEL_NAME);
-      broadcastCh.onmessage = (msg) => {
-        if (msg.data && msg.data.type === 'OFFICIALS_UPDATED') {
-          callback(msg.data.data || loadOfficials());
+      broadcastChannel = new BroadcastChannel(OFFICIALS_CHANNEL_NAME);
+
+      broadcastChannel.onmessage = async (event) => {
+        if (event.data?.type === 'OFFICIALS_UPDATED') {
+          try {
+            // loadOfficialsFromAPI already dispatches the sync event,
+            // which calls the callback once if the data changed.
+            await loadOfficialsFromAPI();
+          } catch (error) {
+            console.error('Could not refresh officials:', error);
+          }
         }
       };
-    } catch (_) {}
+    } catch (error) {
+      console.warn('Officials subscription failed:', error);
+    }
   }
 
   return () => {
     window.removeEventListener(OFFICIALS_SYNC_EVENT, handleCustom);
-    window.removeEventListener('storage', handleStorage);
-    if (broadcastCh) {
-      broadcastCh.close();
+
+    if (broadcastChannel) {
+      broadcastChannel.close();
     }
   };
 }
