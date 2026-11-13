@@ -2060,9 +2060,9 @@
           <!-- Quick Presets -->
           <div class="form-group">
             <div class="preset-label-row">
-              <label class="form-label">Quick Action Presets (Click to autofill response):</label>
+              <div class="form-label" id="resolvePresetsLabel">Quick Action Presets (Click to autofill response):</div>
             </div>
-            <div class="resolve-quick-chips" id="resolveQuickChips">
+            <div class="resolve-quick-chips" id="resolveQuickChips" role="group" aria-labelledby="resolvePresetsLabel">
               <button type="button" class="quick-chip-btn" data-text="Barangay Public Works mobilized with backhoe & desilting crew. Culvert cleared, 35 sacks of plastic waste removed, and normal waterflow restored.">🚜 Desilted &amp; Cleared Culvert</button>
               <button type="button" class="quick-chip-btn" data-text="BPSO Tanod patrol dispatched immediately on site. Hazard secured with safety barriers and danger signage. Public access safely regulated.">🛡️ BPSO Patrol Dispatched &amp; Secured</button>
               <button type="button" class="quick-chip-btn" data-text="Electrician team deployed. Damaged/dangling cables secured and replaced with new 100W Solar LED lighting unit under AIP Program.">💡 Repaired &amp; Replaced Lighting</button>
@@ -2109,13 +2109,13 @@
       <div class="modal-body">
         <form id="newIncidentForm" class="modal-form">
           <div class="form-group">
-            <label class="form-label">Concern Title <span class="text-danger">*</span></label>
+            <label class="form-label" for="newIncTitle">Concern Title <span class="text-danger">*</span></label>
             <input type="text" id="newIncTitle" class="form-input" placeholder="e.g. Damaged drainage cover near chapel" required>
             <span class="field-error-text text-danger" id="newIncTitleError"></span>
           </div>
           <div class="form-grid-2">
             <div class="form-group">
-              <label class="form-label">Category <span class="text-danger">*</span></label>
+              <label class="form-label" for="newIncCategory">Category <span class="text-danger">*</span></label>
               <select id="newIncCategory" class="form-select" required>
                 <option value="Infrastructure">Infrastructure</option>
                 <option value="Sanitation">Sanitation</option>
@@ -2126,7 +2126,7 @@
               </select>
             </div>
             <div class="form-group">
-              <label class="form-label">Location / Sitio <span class="text-danger">*</span></label>
+              <label class="form-label" for="newIncLocation">Location / Sitio <span class="text-danger">*</span></label>
               <select id="newIncLocation" class="form-select" required>
                 <option value="Sitio Ibaba">Sitio Ibaba</option>
                 <option value="Sitio Santolan">Sitio Santolan</option>
@@ -2152,10 +2152,10 @@
           </div>
           <!-- Urgency Level Toggle Card (Standard vs Urgent) -->
           <div class="form-group">
-            <label class="form-label" style="display: flex; align-items: center; justify-content: space-between;">
+            <div class="form-label" style="display: flex; align-items: center; justify-content: space-between;">
               <span>Urgency Level</span>
               <span style="font-size: 11px; color: #64748b; font-weight: 600;">Click to switch between Standard &amp; Urgent</span>
-            </label>
+            </div>
             <button type="button" class="btn-critical-toggle-card" id="btnToggleConcernUrgency">
               <div class="critical-toggle-icon">
                 <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.3">
@@ -2176,7 +2176,7 @@
             <input type="hidden" id="newIncUrgency" value="Standard">
           </div>
           <div class="form-group">
-            <label class="form-label">Detailed Description <span class="text-danger">*</span></label>
+            <label class="form-label" for="newIncDesc">Detailed Description <span class="text-danger">*</span></label>
             <textarea id="newIncDesc" class="form-textarea" rows="3" placeholder="Provide detailed description of the resident's concern..." required></textarea>
             <span class="field-error-text text-danger" id="newIncDescError"></span>
           </div>
@@ -2253,10 +2253,10 @@
           </div>
           <!-- Critical Priority / Emergency Advisory Toggle Button -->
           <div class="form-group">
-            <label class="form-label" style="display: flex; align-items: center; justify-content: space-between;">
+            <div class="form-label" style="display: flex; align-items: center; justify-content: space-between;">
               <span>Advisory Urgency &amp; Classification</span>
               <span style="font-size: 11px; color: #64748b; font-weight: 600;">Click button to toggle priority</span>
-            </label>
+            </div>
             <button type="button" class="btn-critical-toggle-card" id="btnToggleCriticalPriority">
               <div class="critical-toggle-icon">
                 <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.3">
@@ -3112,11 +3112,11 @@
         </div>
 
         <!-- Required Reason Selection -->
-        <label style="font-size: 12px; font-weight: 700; color: #334155; text-transform: uppercase; letter-spacing: 0.04em;">
+        <div id="resRejectReasonLabel" style="font-size: 12px; font-weight: 700; color: #334155; text-transform: uppercase; letter-spacing: 0.04em;">
           Select Rejection Reason <span style="color: #dc2626;">*</span>
-        </label>
+        </div>
 
-        <div class="res-reason-selector" id="resReasonSelector">
+        <div class="res-reason-selector" id="resReasonSelector" role="radiogroup" aria-labelledby="resRejectReasonLabel">
           <!-- 1. Invalid ID -->
           <label class="res-reason-card selected" for="reasonInvalidId">
             <input type="radio" name="resRejectReason" id="reasonInvalidId" value="Invalid ID" checked>
